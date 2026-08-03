@@ -16,7 +16,7 @@ using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
-using Avalonia.Markup.Xaml.MarkupExtensions;
+using Avalonia.Metadata;
 using Avalonia.Styling;
 using Avalonia.VisualTree;
 
@@ -606,6 +606,8 @@ namespace Avalonia.Controls
         /// <summary>
         /// The binding that will be used to get or set cell content for the clipboard.
         /// </summary>
+        [AssignBinding]
+        [InheritDataTypeFromItems(nameof(DataGrid.ItemsSource), AncestorType = typeof(DataGrid))]
         public virtual BindingBase ClipboardContentBinding
         {
             get
