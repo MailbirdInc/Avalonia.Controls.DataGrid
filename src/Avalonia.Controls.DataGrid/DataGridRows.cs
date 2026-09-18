@@ -988,14 +988,26 @@ namespace Avalonia.Controls
             {
                 double availableHeight = CellsEstimatedHeight - heightAboveStartSlot;
                 // Actually expand the displayed slots up to what we can display
+                int lastInsertedSlot = -1;
                 for (int i = startSlot; (i <= endSlot) && (currentHeightChange < availableHeight); i++)
                 {
                     Control insertedElement = InsertDisplayedElement(i, updateSlotInformation: false);
                     currentHeightChange += insertedElement.DesiredSize.Height;
+                    lastInsertedSlot = i;
                     if (i > DisplayData.LastScrollingSlot)
                     {
                         DisplayData.LastScrollingSlot = i;
                     }
+                }
+
+                // RemoveValues above made every slot in [startSlot, endSlot] visible, but this loop
+                // stops as soon as the viewport is full. Slots past the last one we inserted have no
+                // element, so the window must not keep claiming them - GetCircularListIndex would
+                // then reach Count and UnloadScrollingElement's `> Count` guard lets that through
+                // into RemoveAt.
+                if (lastInsertedSlot >= 0 && lastInsertedSlot < endSlot && DisplayData.LastScrollingSlot > lastInsertedSlot)
+                {
+                    DisplayData.LastScrollingSlot = lastInsertedSlot;
                 }
             }
 
@@ -2612,6 +2624,47 @@ namespace Avalonia.Controls
         // be applied this header
         // Returns the number of pixels that were expanded or (collapsed); however, if we're expanding displayed rows, we only expand up
         // to what we can display
+        // Rebuild the display window from scratch after a group visibility change. This control
+        // updates _collapsedSlotsTable and DisplayData in a different order on each path and they
+        // drift apart - the window ends up claiming slots whose elements it does not have, or
+        // starting on a slot that is collapsed. ResetDisplayedRows + UpdateDisplayedRows is the
+        // control's own idiom for a window it cannot trust (see ScrollSlotsByHeight's large-scroll
+        // branches) and costs one viewport of recycled elements.
+        private void RebuildDisplayedRows(int anchorSlot)
+        {
+            ResetDisplayedRows();
+
+            if (SlotCount > 0)
+            {
+                int slot = Math.Max(0, anchorSlot);
+                if (slot < SlotCount && _collapsedSlotsTable.Contains(slot))
+                {
+                    slot = GetNextVisibleSlot(slot);
+                }
+
+                if (slot >= SlotCount)
+                {
+                    // Nothing visible below the anchor; fill upwards from the last visible slot.
+                    int lastVisibleSlot = GetPreviousVisibleSlot(SlotCount);
+                    if (lastVisibleSlot >= 0)
+                    {
+                        UpdateDisplayedRowsFromBottom(lastVisibleSlot);
+                    }
+                }
+                else
+                {
+                    UpdateDisplayedRows(slot, CellsEstimatedHeight);
+                }
+            }
+
+            // ResetDisplayedRows only moves elements onto the recycle stacks - it leaves them in the
+            // presenter's children, still visible. Anything the rebuild did not reuse stays painted
+            // at its old position: a stale header that swallows clicks, or an orphan row under fully
+            // collapsed groups. Reuse clears IsVisible again via GetUsedRow / GetUsedGroupHeader, so
+            // hiding the leftovers here is safe.
+            DisplayData.FullyRecycleElements();
+        }
+
         private double UpdateRowGroupVisibility(DataGridRowGroupInfo targetRowGroupInfo, bool newIsVisible, bool isDisplayed)
         {
             double heightChange = 0;
@@ -2697,18 +2750,12 @@ namespace Avalonia.Controls
                         newFirstScrollingSlot = GetNextVisibleSlot(newFirstScrollingSlot);
                     }
                     heightChange += CollapseSlotsInTable(startSlot, endSlot, ref slotsExpanded, oldLastDisplayedSlot, ref heightChangeBelowLastDisplayedSlot);
-                    if (isDisplayed)
-                    {
-                        if (newFirstScrollingSlot >= SlotCount)
-                        {
-                            // No visible slots below, look up
-                            UpdateDisplayedRowsFromBottom(targetRowGroupInfo.Slot);
-                        }
-                        else
-                        {
-                            UpdateDisplayedRows(newFirstScrollingSlot, CellsEstimatedHeight);
-                        }
-                    }
+
+                    // Rebuild instead of repairing in place. newFirstScrollingSlot was resolved
+                    // against the pre-collapse table, so it can now sit inside the range we just
+                    // collapsed, and the isDisplayed gate skips the repair entirely in the one case
+                    // that needs it most - collapsing a group scrolled above the viewport.
+                    RebuildDisplayedRows(newFirstScrollingSlot);
                 }
                 else
                 {
