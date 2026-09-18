@@ -1,4 +1,4 @@
-﻿// (c) Copyright Microsoft Corporation.
+// (c) Copyright Microsoft Corporation.
 // This source is subject to the Microsoft Public License (Ms-PL).
 // Please see http://go.microsoft.com/fwlink/?LinkID=131993 for details.
 // All other rights reserved.
@@ -739,8 +739,16 @@ namespace Avalonia.Controls
                 }
             }
 
-            // Update _collapsedSlotsTable in one bulk operation
-            _collapsedSlotsTable.AddValues(startSlot, endSlot - startSlot + 1, false);
+            // Skip an empty range. A group header can sit at SlotCount while the collection is
+            // still being rebuilt, which makes endSlot < startSlot and adds an inverted Range whose
+            // Count is negative. AddValues asserts count > 0, but the assert is inert at runtime, so
+            // the bad entry silently makes GetIndexCount undercount, which corrupts the display
+            // window and crashes the grid.
+            if (endSlot >= startSlot)
+            {
+                // Update _collapsedSlotsTable in one bulk operation
+                _collapsedSlotsTable.AddValues(startSlot, endSlot - startSlot + 1, false);
+            }
 
             return totalHeightChange;
         }
