@@ -54,6 +54,16 @@ namespace Avalonia.Collections
         }
 
         public virtual string PropertyName => String.Empty;
+
+        /// <summary>
+        /// Optional ordering for the subgroups this description produces. When null - the default,
+        /// and what every existing description gets - groups appear in the order their first item
+        /// happened to arrive. Supply a comparer to render them in a fixed order instead, which
+        /// matters whenever the item order is not itself grouped (sorting unread rows to the top,
+        /// for instance, interleaves items from every group).
+        /// </summary>
+        public virtual IComparer<object> KeyComparer => null;
+
         public abstract object GroupKeyFromItem(object item, int level, CultureInfo culture);
         public virtual bool KeysMatch(object groupKey, object itemKey)
         {
@@ -296,6 +306,27 @@ namespace Avalonia.Collections
         {
             ChangeCounts(item, +1);
             ProtectedItems.Add(item);
+        }
+
+        /// <summary>
+        /// Adds a subgroup at the position its key sorts to, rather than at the end.
+        /// </summary>
+        /// <param name="subgroup">Subgroup to add</param>
+        /// <param name="keyComparer">Comparer defining the order of subgroup keys</param>
+        internal void AddByKey(DataGridCollectionViewGroupInternal subgroup, IComparer<object> keyComparer)
+        {
+            // Never insert before the explicit subgroups, matching Insert.
+            int index = (GroupBy == null) ? 0 : GroupBy.GroupKeys.Count;
+
+            while (index < ProtectedItems.Count
+                   && ProtectedItems[index] is DataGridCollectionViewGroupInternal existing
+                   && keyComparer.Compare(existing.Key, subgroup.Key) <= 0)
+            {
+                index++;
+            }
+
+            ChangeCounts(subgroup, +1);
+            ProtectedItems.Insert(index, subgroup);
         }
 
         /// <summary>
@@ -1077,7 +1108,12 @@ namespace Avalonia.Collections
         private void AddToSubgroup(object item, DataGridCollectionViewGroupInternal group, int level, object key, bool loading)
         {
             DataGridCollectionViewGroupInternal subgroup;
-            int index = (_isDataInGroupOrder) ? group.LastIndex : 0;
+
+            // A key comparer means the subgroups are deliberately not in arrival order, so the
+            // "data is already grouped" shortcut would scan past a group that sorts earlier and
+            // create a second copy of it. Start from the beginning whenever one is in play.
+            IComparer<object> keyComparer = group.GroupBy?.KeyComparer;
+            int index = (_isDataInGroupOrder && keyComparer == null) ? group.LastIndex : 0;
 
             // find the desired subgroup
             for (int n = group.Items.Count; index < n; ++index)
@@ -1100,7 +1136,12 @@ namespace Avalonia.Collections
             subgroup = new DataGridCollectionViewGroupInternal(key, group);
             InitializeGroup(subgroup, level + 1, item);
 
-            if (loading)
+            if (keyComparer != null)
+            {
+                // Ordered by key on both paths, so the initial load and a later insert agree.
+                group.AddByKey(subgroup, keyComparer);
+            }
+            else if (loading)
             {
                 group.Add(subgroup);
                 group.LastIndex = index;
