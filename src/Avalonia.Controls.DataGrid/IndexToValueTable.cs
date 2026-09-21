@@ -274,6 +274,17 @@ namespace Avalonia.Controls
         /// <param name="lowerBound">lowerBound criteria</param>
         /// <param name="upperBound">upperBound criteria</param>
         /// <returns>Number of indexes contained in the table between lowerBound and upperBound (inclusive)</returns>
+        // TEMPORARY DIAGNOSTIC — not for release.
+        internal string MailbirdDescribeRanges()
+        {
+            var builder = new System.Text.StringBuilder("[");
+            foreach (var range in _list)
+            {
+                builder.Append('(').Append(range.LowerBound).Append('-').Append(range.UpperBound).Append(')');
+            }
+            return builder.Append(']').ToString();
+        }
+
         public int GetIndexCount(int lowerBound, int upperBound)
         {
             if (upperBound < lowerBound || _list.Count == 0)

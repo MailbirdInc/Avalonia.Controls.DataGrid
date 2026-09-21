@@ -338,6 +338,16 @@ namespace Avalonia.Controls
 
         internal void OnRowsMeasure()
         {
+            MailbirdInsertDiagnostics.State(
+                "measure",
+                RowGroupHeadersTable.GetIndexes().Select(slot => RowGroupHeadersTable.GetValueAt(slot)).Where(info => info != null),
+                DisplayData.FirstScrollingSlot,
+                DisplayData.LastScrollingSlot,
+                VisibleSlotCount,
+                SlotCount,
+                _rowsPresenter == null ? -1 : _rowsPresenter.Children.OfType<DataGridRow>().Count(row => row.IsVisible),
+                _collapsedSlotsTable);
+
             if (!MathUtilities.IsZero(DisplayData.PendingVerticalScrollHeight))
             {
                 ScrollSlotsByHeight(DisplayData.PendingVerticalScrollHeight);
@@ -748,6 +758,10 @@ namespace Avalonia.Controls
             {
                 // Update _collapsedSlotsTable in one bulk operation
                 _collapsedSlotsTable.AddValues(startSlot, endSlot - startSlot + 1, false);
+            }
+            else
+            {
+                MailbirdInsertDiagnostics.EmptyCollapseRange(startSlot, endSlot, SlotCount, _collapsedSlotsTable);
             }
 
             return totalHeightChange;
@@ -1195,6 +1209,16 @@ namespace Avalonia.Controls
 
         private void InsertDisplayedElement(int slot, Control element, bool wasNewlyAdded, bool updateSlotInformation)
         {
+            MailbirdInsertDiagnostics.Displayed(
+                slot,
+                element,
+                _collapsedSlotsTable.Contains(slot),
+                DisplayData.FirstScrollingSlot,
+                DisplayData.LastScrollingSlot,
+                VisibleSlotCount,
+                SlotCount,
+                _collapsedSlotsTable);
+
             // We can only support creating new rows that are adjacent to the currently visible rows
             // since they need to be added to the visual tree for us to Measure them.
             Debug.Assert(DisplayData.FirstScrollingSlot == -1 || slot >= GetPreviousVisibleSlot(DisplayData.FirstScrollingSlot) && slot <= GetNextVisibleSlot(DisplayData.LastScrollingSlot));
@@ -2283,6 +2307,7 @@ namespace Avalonia.Controls
                             group.Items.CollectionChanged += CollectionViewGroup_CollectionChanged;
                         }
                         var newGroupInfo = new DataGridRowGroupInfo(group, true, parentGroupInfo.Level + 1, insertSlot, insertSlot);
+                        MailbirdInsertDiagnostics.Insert(insertSlot, parentGroupInfo, isCollapsed, true, SlotCount, VisibleSlotCount, _collapsedSlotsTable);
                         InsertElementAt(insertSlot,
                             rowIndex: -1,
                             item: null,
@@ -2299,6 +2324,7 @@ namespace Avalonia.Controls
                         {
                             AutoGenerateColumnsPrivate();
                         }
+                        MailbirdInsertDiagnostics.Insert(insertSlot, parentGroupInfo, isCollapsed, false, SlotCount, VisibleSlotCount, _collapsedSlotsTable);
                         InsertElementAt(insertSlot, rowIndex,
                             item: e.NewItems[0],
                             groupInfo: null,
@@ -2306,6 +2332,13 @@ namespace Avalonia.Controls
                     }
 
                     CorrectLastSubItemSlotsAfterInsertion(parentGroupInfo);
+                    MailbirdInsertDiagnostics.Audit(
+                        "after-insert",
+                        parentGroupInfo,
+                        parentGroupInfo.LastSubItemSlot >= parentGroupInfo.Slot + 1
+                            ? _collapsedSlotsTable.GetIndexCount(parentGroupInfo.Slot + 1, parentGroupInfo.LastSubItemSlot)
+                            : 0,
+                        _collapsedSlotsTable);
                     if (parentGroupInfo.LastSubItemSlot - parentGroupInfo.Slot == 1)
                     {
                         // We just added the first item to a RowGroup so the header should transition from Empty to either Expanded or Collapsed
@@ -2562,6 +2595,14 @@ namespace Avalonia.Controls
             {
                 return;
             }
+            MailbirdInsertDiagnostics.Ensure(
+                rowGroupInfo,
+                isVisible,
+                rowGroupInfo != null && IsSlotVisible(rowGroupInfo.Slot),
+                rowGroupInfo != null && _collapsedSlotsTable.Contains(rowGroupInfo.Slot),
+                DisplayData.FirstScrollingSlot,
+                _collapsedSlotsTable);
+
             if (rowGroupInfo.IsVisible != isVisible)
             {
                 if (IsSlotVisible(rowGroupInfo.Slot))
@@ -2576,6 +2617,7 @@ namespace Avalonia.Controls
                     {
                         // Somewhere up the parent chain, there's a collapsed header so all the slots remain the same and
                         // we just need to mark this header with the new visibility
+                        MailbirdInsertDiagnostics.VisibilityChanged(rowGroupInfo.Slot, rowGroupInfo.IsVisible, isVisible, "EnsureRowGroupVisibility/mark-only");
                         rowGroupInfo.IsVisible = isVisible;
                     }
                     else
@@ -2672,6 +2714,7 @@ namespace Avalonia.Controls
             int startSlot = targetRowGroupInfo.Slot + 1;
             int endSlot;
 
+            MailbirdInsertDiagnostics.VisibilityChanged(targetRowGroupInfo.Slot, targetRowGroupInfo.IsVisible, newIsVisible, "UpdateRowGroupVisibility isDisplayed=" + isDisplayed);
             targetRowGroupInfo.IsVisible = newIsVisible;
             if (newIsVisible)
             {
