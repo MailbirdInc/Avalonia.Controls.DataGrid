@@ -1,0 +1,34 @@
+<Project>
+
+  <!--
+    Mailbird packaging overrides for the patched fork.
+
+    This file does not exist upstream, and it is imported after the project, so every Mailbird-only
+    setting lives here instead of in a file a version bump would touch. Rebasing the patch branch
+    onto a newer tag therefore never conflicts on packaging.
+
+    The assembly name deliberately stays Avalonia.Controls.DataGrid: the control reaches into
+    Avalonia.Base internals, which are granted through InternalsVisibleTo qualified by the public
+    key of build/avalonia.snk. Rename the assembly or drop the signing and every one of those calls
+    fails to compile with CS0281. Only the *package* id changes, so the patched build can be
+    published and consumed alongside the upstream package without an id collision.
+  -->
+
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Avalonia.Controls.DataGrid'">
+    <PackageId>Mailbird.Avalonia.Controls.DataGrid</PackageId>
+
+    <!--
+      <upstream tag>-mailbird.<n>. Scripts/DataGrid/build-datagrid-package.sh in the Mailbird repo
+      passes this on the command line, which wins over the value here; the default only covers a
+      manual `dotnet pack` from a checkout of this branch.
+    -->
+    <Version>12.0.0-mailbird.3</Version>
+
+    <Authors>Mailbird</Authors>
+    <RepositoryUrl>https://github.com/MailbirdInc/Avalonia.Controls.DataGrid</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/MailbirdInc/Avalonia.Controls.DataGrid</PackageProjectUrl>
+    <PackageReleaseNotes>https://github.com/MailbirdInc/Avalonia.Controls.DataGrid</PackageReleaseNotes>
+    <PackageDescription>Avalonia.Controls.DataGrid $(Version), patched so that collapsing or expanding a row group cannot corrupt the grid's display window. Built from MailbirdInc/Avalonia.Controls.DataGrid; see the commits on the mailbird/12.0.0 branch for the individual fixes. Drop-in replacement for Avalonia.Controls.DataGrid — same assembly name, same strong-name key.</PackageDescription>
+  </PropertyGroup>
+
+</Project>
