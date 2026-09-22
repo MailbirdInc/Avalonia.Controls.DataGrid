@@ -2706,7 +2706,14 @@ namespace Avalonia.Controls
             else
             {
                 // Collapse
-                endSlot = SlotCount - 1;
+                // The group's own LastSubItemSlot is the authoritative end of its range. SlotCount
+                // is not while AddSlots is rebuilding it slot by slot, and LoadingRowGroup - the event
+                // consumers restore persisted collapse state from - is raised from inside that walk.
+                // For the last group SlotCount - 1 then trails startSlot and the range comes out
+                // inverted: written as-is it corrupts GetIndexCount and the grid throws out of
+                // GetDisplayedElement; skipped, it leaves the group flagged collapsed with none of
+                // its rows hidden.
+                endSlot = Math.Max(SlotCount - 1, targetRowGroupInfo.LastSubItemSlot);
                 foreach (int slot in RowGroupHeadersTable.GetIndexes(targetRowGroupInfo.Slot + 1))
                 {
                     DataGridRowGroupInfo rowGroupInfo = RowGroupHeadersTable.GetValueAt(slot);
