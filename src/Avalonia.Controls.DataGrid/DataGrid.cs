@@ -2962,6 +2962,7 @@ namespace Avalonia.Controls
 
         internal void RefreshRowsAndColumns(bool clearRows)
         {
+            using var _mbScope = MailbirdInsertDiagnostics.Scope("RefreshRowsAndColumns clear=" + clearRows + " measured=" + _measured);
             if (_measured)
             {
                 try

@@ -357,6 +357,7 @@ namespace Avalonia.Controls
 
         internal void RefreshRows(bool recycleRows, bool clearRows)
         {
+            using var _mbScope = MailbirdInsertDiagnostics.Scope("RefreshRows recycle=" + recycleRows + " clear=" + clearRows + " measured=" + _measured + " slotCount=" + SlotCount);
             if (_measured)
             {
                 // _desiredCurrentColumnIndex is used in MakeFirstDisplayedCellCurrentCell to set the
@@ -640,6 +641,7 @@ namespace Avalonia.Controls
 
         private void AddSlots(int totalSlots)
         {
+            MailbirdInsertDiagnostics.Seq("ADD-SLOTS totalSlots=" + totalSlots + " slotCountBefore=" + SlotCount);
             SlotCount = 0;
             VisibleSlotCount = 0;
             IEnumerator<int> groupSlots = null;
@@ -717,6 +719,7 @@ namespace Avalonia.Controls
         // Updates _collapsedSlotsTable and returns the number of pixels that were collapsed
         private double CollapseSlotsInTable(int startSlot, int endSlot, ref int slotsExpanded, int lastDisplayedSlot, ref double heightChangeBelowLastDisplayedSlot)
         {
+            MailbirdInsertDiagnostics.Seq("COLLAPSE-TABLE startSlot=" + startSlot + " endSlot=" + endSlot + " slotCount=" + SlotCount);
             int firstSlot = startSlot;
             int lastSlot;
             double totalHeightChange = 0;
@@ -1289,6 +1292,7 @@ namespace Avalonia.Controls
         private void InsertElement(int slot, Control element, bool updateVerticalScrollBarOnly, bool isCollapsed, bool isRow)
         {
             Debug.Assert(slot >= 0 && slot <= SlotCount);
+            MailbirdInsertDiagnostics.Seq("INSERT-ELEMENT slot=" + slot + " isCollapsed=" + isCollapsed + " isRow=" + isRow + " slotCountBefore=" + SlotCount + " visibleBefore=" + VisibleSlotCount);
 
             OnInsertingElement(slot, true /*firstInsertion*/, isCollapsed);   // will throw an exception if the insertion is illegal
 
@@ -2234,6 +2238,7 @@ namespace Avalonia.Controls
 
         private void CollectionViewGroup_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
         {
+            using var _mbScope = MailbirdInsertDiagnostics.Scope("CVG-Changed " + e.Action + " sender=" + (ReferenceEquals(sender, _topLevelGroup) ? "TOP" : "group") + " newIndex=" + e.NewStartingIndex);
             // If we receive this event when the number of GroupDescriptions is different than what we have already
             // accounted for, that means the ICollectionView is still in the process of updating its groups.  It will
             // send a reset notification when it's done, at which point we can update our visuals.
@@ -2398,6 +2403,7 @@ namespace Avalonia.Controls
 
         private void ClearRowGroupHeadersTable()
         {
+            MailbirdInsertDiagnostics.Seq("CLEAR-GROUPS slotCount=" + SlotCount);
             // Detach existing handlers on CollectionViewGroup.Items.CollectionChanged
             foreach (int slot in RowGroupHeadersTable.GetIndexes())
             {
@@ -2442,6 +2448,7 @@ namespace Avalonia.Controls
         // because CorrectSlotsAfterInsertion only increments those that come after the specified group
         private void CorrectLastSubItemSlotsAfterInsertion(DataGridRowGroupInfo subGroupInfo)
         {
+            MailbirdInsertDiagnostics.Seq("CORRECT-LASTSUB key=" + (subGroupInfo?.CollectionViewGroup?.Key) + " slot=" + (subGroupInfo?.Slot ?? -1) + " lastSubBefore=" + (subGroupInfo?.LastSubItemSlot ?? -1));
             int subGroupSlot;
             int subGroupLevel;
             while (subGroupInfo != null)
@@ -2522,6 +2529,7 @@ namespace Avalonia.Controls
             }
             SlotCount = DataConnection.Count + RowGroupHeadersTable.IndexCount;
             VisibleSlotCount = SlotCount;
+            MailbirdInsertDiagnostics.Groups("POPULATE", RowGroupHeadersTable.GetIndexes().Select(slot => RowGroupHeadersTable.GetValueAt(slot)), SlotCount, VisibleSlotCount, _collapsedSlotsTable);
         }
 
         private void RefreshRowGroupHeaders()
@@ -2591,6 +2599,7 @@ namespace Avalonia.Controls
 
         private void EnsureRowGroupVisibility(DataGridRowGroupInfo rowGroupInfo, bool isVisible, bool setCurrent)
         {
+            using var _mbScope = MailbirdInsertDiagnostics.Scope("EnsureRowGroupVisibility requested=" + isVisible);
             if (rowGroupInfo == null)
             {
                 return;
@@ -2601,7 +2610,8 @@ namespace Avalonia.Controls
                 rowGroupInfo != null && IsSlotVisible(rowGroupInfo.Slot),
                 rowGroupInfo != null && _collapsedSlotsTable.Contains(rowGroupInfo.Slot),
                 DisplayData.FirstScrollingSlot,
-                _collapsedSlotsTable);
+                _collapsedSlotsTable,
+                SlotCount);
 
             if (rowGroupInfo.IsVisible != isVisible)
             {
@@ -2709,6 +2719,7 @@ namespace Avalonia.Controls
 
         private double UpdateRowGroupVisibility(DataGridRowGroupInfo targetRowGroupInfo, bool newIsVisible, bool isDisplayed)
         {
+            MailbirdInsertDiagnostics.Seq("UPDATE-VIS key=" + (targetRowGroupInfo.CollectionViewGroup?.Key) + " slot=" + targetRowGroupInfo.Slot + " lastSub=" + targetRowGroupInfo.LastSubItemSlot + " items=" + (targetRowGroupInfo.CollectionViewGroup?.ItemCount ?? -1) + " newIsVisible=" + newIsVisible + " isDisplayed=" + isDisplayed + " slotCount=" + SlotCount);
             double heightChange = 0;
             int slotsExpanded = 0;
             int startSlot = targetRowGroupInfo.Slot + 1;
@@ -2895,6 +2906,7 @@ namespace Avalonia.Controls
             }
             groupHeader.UpdateTitleElements();
 
+            MailbirdInsertDiagnostics.Seq("LOADING-ROW-GROUP slot=" + slot + " key=" + (rowGroupInfo?.CollectionViewGroup?.Key) + " vis=" + (rowGroupInfo?.IsVisible));
             OnLoadingRowGroup(new DataGridRowGroupHeaderEventArgs(groupHeader));
 
             return groupHeader;
@@ -2923,6 +2935,7 @@ namespace Avalonia.Controls
 
         internal void OnRowGroupHeaderToggled(DataGridRowGroupHeader groupHeader, bool newIsVisible, bool setCurrent)
         {
+            MailbirdInsertDiagnostics.Seq("HEADER-TOGGLED slot=" + (groupHeader.RowGroupInfo?.Slot ?? -1) + " newIsVisible=" + newIsVisible);
             Debug.Assert(groupHeader.RowGroupInfo.CollectionViewGroup.ItemCount > 0);
 
             if (WaitForLostFocus(delegate { OnRowGroupHeaderToggled(groupHeader, newIsVisible, setCurrent); }) || !CommitEdit())
@@ -2974,9 +2987,11 @@ namespace Avalonia.Controls
                 DataGridRowGroupInfo rowGroupInfo = RowGroupHeadersTable.GetValueAt(slot);
                 if (rowGroupInfo.CollectionViewGroup == collectionViewGroup)
                 {
+                    MailbirdInsertDiagnostics.Seq("RESOLVE key=" + collectionViewGroup?.Key + " -> slot=" + rowGroupInfo.Slot + " lastSub=" + rowGroupInfo.LastSubItemSlot + " vis=" + rowGroupInfo.IsVisible + " slotCount=" + SlotCount + (rowGroupInfo.Slot >= SlotCount ? "   <<< STALE" : string.Empty));
                     return rowGroupInfo;
                 }
             }
+            MailbirdInsertDiagnostics.Seq("RESOLVE key=" + collectionViewGroup?.Key + " -> null (group not in table)");
             return null;
         }
 

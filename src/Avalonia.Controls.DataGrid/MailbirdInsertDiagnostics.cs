@@ -1,24 +1,36 @@
-// TEMPORARY DIAGNOSTIC — not for release. Traces the interaction between row-group collapse
-// bookkeeping and rows inserted into an already-collapsed group (CU-86d43b20k follow-up).
+// TEMPORARY DIAGNOSTIC - not for release. Full ordered trace of row-group collapse bookkeeping.
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
+using System.Threading;
 
 namespace Avalonia.Controls
 {
+    /// <summary>TEMPORARY: the one public seam the consuming app uses to write into the same ordered trace.</summary>
+    public static class MailbirdTrace
+    {
+        public static void Seq(string line) => MailbirdInsertDiagnostics.Seq(line);
+    }
+
     internal static class MailbirdInsertDiagnostics
     {
         // Fixed path: the app relaunches itself, which loses any environment variable.
         private const string LOG_PATH =
             "/Users/secelead/Projects/MailbirdNext/AppData/Debug/Logs/dg-insert-diag.log";
 
-        private static readonly object Gate = new object();
+        private static readonly object _gate = new object();
         private static bool _armed;
+        private static long _seq;
+        [ThreadStatic] private static int _depth;
 
-        private static void Write(string line)
+        /// <summary>One ordered line. Shared by the control and the app so both sides interleave exactly.</summary>
+        public static void Seq(string line)
         {
-            lock (Gate)
+            long n = Interlocked.Increment(ref _seq);
+            lock (_gate)
             {
                 try
                 {
@@ -26,11 +38,12 @@ namespace Avalonia.Controls
                     {
                         _armed = true;
                         File.AppendAllText(LOG_PATH,
-                            $"=== probe armed {DateTime.Now:HH:mm:ss.fff} pid={Environment.ProcessId} ==={Environment.NewLine}");
+                            $"=== armed {DateTime.Now:HH:mm:ss.ffffff} pid={Environment.ProcessId} ==={Environment.NewLine}");
                     }
 
                     File.AppendAllText(LOG_PATH,
-                        $"{DateTime.Now:HH:mm:ss.fff} | {line}{Environment.NewLine}");
+                        string.Format(CultureInfo.InvariantCulture, "#{0:D6} d{1} {2:HH:mm:ss.ffffff} | {3}{4}",
+                            n, _depth, DateTime.Now, line, Environment.NewLine));
                 }
                 catch
                 {
@@ -39,210 +52,108 @@ namespace Avalonia.Controls
             }
         }
 
+        /// <summary>Re-entrancy tracking: depth rises while inside the scope, so a collapse that runs
+        /// from within the view's own mutation shows up as depth > 1.</summary>
+        public static IDisposable Scope(string name)
+        {
+            Seq("ENTER " + name);
+            _depth++;
+            return new ScopeExit(name);
+        }
+
+        private sealed class ScopeExit : IDisposable
+        {
+            private readonly string _name;
+            public ScopeExit(string name) { _name = name; }
+            public void Dispose() { _depth--; Seq("EXIT  " + _name); }
+        }
+
         private static string Ranges(IndexToValueTable<bool> table)
         {
-            try
-            {
-                return table == null ? "<null>" : table.MailbirdDescribeRanges();
-            }
-            catch (Exception exception)
-            {
-                return "<error:" + exception.GetType().Name + ">";
-            }
+            try { return table == null ? "<null>" : table.MailbirdDescribeRanges(); }
+            catch (Exception exception) { return "<error:" + exception.GetType().Name + ">"; }
         }
 
-        /// <summary>
-        /// The guard that skips an inverted collapse range. A group collapsed here gets its flag
-        /// set but none of its slots, which leaves it half-collapsed and its rows on screen.
-        /// </summary>
-        public static void EmptyCollapseRange(int startSlot, int endSlot, int slotCount, IndexToValueTable<bool> collapsed)
+        private static string Key(DataGridRowGroupInfo info) =>
+            info?.CollectionViewGroup?.Key?.ToString() ?? "?";
+
+        public static void Groups(string tag, IEnumerable<DataGridRowGroupInfo> infos, int slotCount, int visibleSlotCount, IndexToValueTable<bool> collapsed)
         {
-            Write(string.Format(CultureInfo.InvariantCulture,
-                "!!! EMPTY-COLLAPSE-RANGE startSlot={0} endSlot={1} slotCount={2} ranges={3}",
-                startSlot, endSlot, slotCount, Ranges(collapsed)));
+            var parts = infos.Select(i => string.Format(CultureInfo.InvariantCulture,
+                "{0}[slot={1} lastSub={2} vis={3} items={4}]", Key(i), i.Slot, i.LastSubItemSlot, i.IsVisible ? "+" : "-",
+                i.CollectionViewGroup?.ItemCount ?? -1));
+            Seq(string.Format(CultureInfo.InvariantCulture, "GROUPS {0} slotCount={1} visibleSlots={2} {3} ranges={4}",
+                tag, slotCount, visibleSlotCount, string.Join(" ", parts), Ranges(collapsed)));
         }
 
-        /// <summary>Every entry into EnsureRowGroupVisibility, including the ones that do nothing.</summary>
-        public static void Ensure(
-            DataGridRowGroupInfo info,
-            bool requested,
-            bool slotVisible,
-            bool headerSlotCollapsed,
-            int firstScrollingSlot,
-            IndexToValueTable<bool> collapsed)
+        public static void Ensure(DataGridRowGroupInfo info, bool requested, bool slotVisible, bool headerSlotCollapsed,
+            int firstScrollingSlot, IndexToValueTable<bool> collapsed, int slotCount = -1)
         {
-            if (info == null)
-            {
-                Write("ENSURE info=<NULL> requested=" + requested + "  <-- group could not be resolved");
-                return;
-            }
-
-            string branch = info.IsVisible == requested
-                ? "EARLY-RETURN(no change)"
+            if (info == null) { Seq("ENSURE info=<NULL> requested=" + requested + "  <-- group could not be resolved"); return; }
+            string branch = info.IsVisible == requested ? "EARLY-RETURN(no change)"
                 : slotVisible ? "via ToggleExpandCollapse" : headerSlotCollapsed ? "mark-only" : "UpdateRowGroupVisibility";
-
-            // Quiet unless something is wrong; the desync shows up in State/Audit instead.
-            _ = branch;
+            bool stale = slotCount >= 0 && info.Slot >= slotCount;
+            Seq(string.Format(CultureInfo.InvariantCulture,
+                "ENSURE key={0} slot={1} lastSub={2} items={3} wasVisible={4} requested={5} slotVisible={6} headerSlotCollapsed={7} first={8} slotCount={9} branch={10}{11} ranges={12}",
+                Key(info), info.Slot, info.LastSubItemSlot, info.CollectionViewGroup?.ItemCount ?? -1, info.IsVisible, requested,
+                slotVisible, headerSlotCollapsed, firstScrollingSlot, slotCount, branch,
+                stale ? "   <<< STALE: header slot >= SlotCount" : string.Empty, Ranges(collapsed)));
         }
 
-        /// <summary>Each row/header insert, with the collapsed decision the caller computed.</summary>
-        public static void Insert(
-            int insertSlot,
-            DataGridRowGroupInfo parent,
-            bool isCollapsed,
-            bool isGroupHeader,
-            int slotCount,
-            int visibleSlotCount,
-            IndexToValueTable<bool> collapsed)
+        public static void Insert(int insertSlot, DataGridRowGroupInfo parent, bool isCollapsed, bool isGroupHeader,
+            int slotCount, int visibleSlotCount, IndexToValueTable<bool> collapsed)
         {
-            // Only the contradictory case is worth a disk write; a row inserted into a collapsed
-            // parent must itself be collapsed.
-            if (parent == null || parent.IsVisible || isCollapsed)
-            {
-                return;
-            }
-
-            Write(string.Format(CultureInfo.InvariantCulture,
-                "!!! INSERT-VISIBLE-INTO-COLLAPSED slot={0} kind={1} parentSlot={2} parentVisible={3} parentLastSub={4} isCollapsed={5} slotCount={6} visibleSlots={7} ranges={8}",
-                insertSlot, isGroupHeader ? "header" : "row",
-                parent == null ? -1 : parent.Slot,
-                parent == null ? (object)"<null>" : parent.IsVisible,
-                parent == null ? -1 : parent.LastSubItemSlot,
+            bool contradiction = parent != null && !parent.IsVisible && !isCollapsed;
+            Seq(string.Format(CultureInfo.InvariantCulture,
+                "{0}ADD kind={1} insertSlot={2} parentKey={3} parentSlot={4} parentVisible={5} parentLastSub={6} parentItems={7} isCollapsed={8} slotCount={9} visibleSlots={10} ranges={11}",
+                contradiction ? "!!! INSERT-VISIBLE-INTO-COLLAPSED " : string.Empty,
+                isGroupHeader ? "header" : "row", insertSlot, Key(parent),
+                parent == null ? -1 : parent.Slot, parent == null ? (object)"<null>" : parent.IsVisible,
+                parent == null ? -1 : parent.LastSubItemSlot, parent?.CollectionViewGroup?.ItemCount ?? -1,
                 isCollapsed, slotCount, visibleSlotCount, Ranges(collapsed)));
         }
 
-        /// <summary>The visibility flag flip itself, so a silent desync is attributable.</summary>
-        public static void VisibilityChanged(int slot, bool oldValue, bool newValue, string source)
-        {
-            // Retained as a no-op: the flag transitions are reconstructible from the anomaly dump.
-            _ = slot; _ = oldValue; _ = newValue; _ = source;
-        }
+        public static void VisibilityChanged(int slot, bool oldValue, bool newValue, string source) =>
+            Seq(string.Format(CultureInfo.InvariantCulture, "SETVISIBLE slot={0} {1} -> {2} source={3}", slot, oldValue, newValue, source));
 
-        /// <summary>Fires when an element is put on screen for a slot the collapsed table hides.</summary>
-        public static void Displayed(
-            int slot,
-            object element,
-            bool slotIsCollapsed,
-            int firstScrollingSlot,
-            int lastScrollingSlot,
-            int visibleSlotCount,
-            int slotCount,
-            IndexToValueTable<bool> collapsed)
-        {
-            if (!slotIsCollapsed)
-            {
-                return;
-            }
+        public static void EmptyCollapseRange(int startSlot, int endSlot, int slotCount, IndexToValueTable<bool> collapsed) =>
+            Seq(string.Format(CultureInfo.InvariantCulture,
+                "!!! EMPTY-COLLAPSE-RANGE startSlot={0} endSlot={1} slotCount={2} ranges={3}", startSlot, endSlot, slotCount, Ranges(collapsed)));
 
-            Write(string.Format(CultureInfo.InvariantCulture,
+        public static void Displayed(int slot, object element, bool slotIsCollapsed, int firstScrollingSlot, int lastScrollingSlot,
+            int visibleSlotCount, int slotCount, IndexToValueTable<bool> collapsed)
+        {
+            if (!slotIsCollapsed) return;
+            Seq(string.Format(CultureInfo.InvariantCulture,
                 "!!! DISPLAY-COLLAPSED slot={0} element={1} window=[{2}..{3}] visibleSlots={4} slotCount={5} ranges={6}",
-                slot, element == null ? "<null>" : element.GetType().Name,
-                firstScrollingSlot, lastScrollingSlot, visibleSlotCount, slotCount, Ranges(collapsed)));
+                slot, element == null ? "<null>" : element.GetType().Name, firstScrollingSlot, lastScrollingSlot, visibleSlotCount, slotCount, Ranges(collapsed)));
         }
 
-        private static DateTime _lastState;
-        private static string _lastStateLine = string.Empty;
-
-        /// <summary>
-        /// Throttled ground-truth dump: what the grid believes about every group versus what the
-        /// display window is showing. Catches the symptom whatever the mechanism, including a
-        /// header whose chevron disagrees with its own RowGroupInfo.
-        /// </summary>
-        public static void State(
-            string tag,
-            System.Collections.Generic.IEnumerable<DataGridRowGroupInfo> groups,
-            int firstScrollingSlot,
-            int lastScrollingSlot,
-            int visibleSlotCount,
-            int slotCount,
-            int displayedRowCount,
-            IndexToValueTable<bool> collapsed)
+        private static string _lastState = string.Empty;
+        public static void State(string tag, IEnumerable<DataGridRowGroupInfo> groups, int firstScrollingSlot, int lastScrollingSlot,
+            int visibleSlotCount, int slotCount, int displayedRowCount, IndexToValueTable<bool> collapsed)
         {
-            var builder = new StringBuilder();
-            int headers = 0;
-            int expanded = 0;
-            foreach (var info in groups)
-            {
-                headers++;
-                if (info.IsVisible)
-                {
-                    expanded++;
-                }
-
-                builder.Append(info.Slot).Append(info.IsVisible ? "+" : "-").Append(' ');
-            }
-
-            // Everything collapsed means the only visible slots are the headers themselves.
-            bool anomaly = (expanded == 0 && visibleSlotCount > headers)
-                || (expanded == 0 && displayedRowCount > 0);
-
-            if (!anomaly)
-            {
-                return;
-            }
-
+            var b = new StringBuilder(); int headers = 0, expanded = 0;
+            foreach (var info in groups) { headers++; if (info.IsVisible) expanded++; b.Append(info.Slot).Append(info.IsVisible ? "+" : "-").Append(' '); }
+            bool anomaly = expanded == 0 && (visibleSlotCount > headers || displayedRowCount > 0);
+            if (!anomaly) return;
             string line = string.Format(CultureInfo.InvariantCulture,
-                "STATE {0} groups={1} expanded={2} visibleSlots={3} slotCount={4} window=[{5}..{6}] displayedRows={7} flags=[{8}] ranges={9}{10}",
-                tag, headers, expanded, visibleSlotCount, slotCount, firstScrollingSlot, lastScrollingSlot,
-                displayedRowCount, builder.ToString().Trim(), Ranges(collapsed),
-                anomaly ? "   <<<< ANOMALY: all groups collapsed but visibleSlots exceeds header count" : string.Empty);
-
-            // Rate-limit: an anomaly persists across many measures, one line per second is plenty.
-            if (line == _lastStateLine && (DateTime.Now - _lastState).TotalSeconds < 1)
-            {
-                return;
-            }
-
-            _lastState = DateTime.Now;
-            _lastStateLine = line;
-            Write(line);
+                "STATE {0} groups={1} expanded={2} visibleSlots={3} slotCount={4} window=[{5}..{6}] displayedRows={7} flags=[{8}] ranges={9}   <<<< ANOMALY",
+                tag, headers, expanded, visibleSlotCount, slotCount, firstScrollingSlot, lastScrollingSlot, displayedRowCount, b.ToString().Trim(), Ranges(collapsed));
+            if (line == _lastState) return;
+            _lastState = line; Seq(line);
         }
 
-        /// <summary>Snapshot of one group's agreement between its flag and the slot table.</summary>
-        public static void Audit(
-            string tag,
-            DataGridRowGroupInfo info,
-            int collapsedChildCount,
-            IndexToValueTable<bool> collapsed)
+        public static void Audit(string tag, DataGridRowGroupInfo info, int collapsedChildCount, IndexToValueTable<bool> collapsed)
         {
-            if (info == null)
-            {
-                return;
-            }
-
-            var builder = new StringBuilder();
-            int from = info.Slot + 1;
-            int to = info.LastSubItemSlot;
-
-            // GetIndexCount answers this over the table's ranges, so the probe stays O(ranges)
-            // instead of walking every child slot on every insert - that cost was enough to move
-            // the timing of the paging burst this is meant to observe.
+            if (info == null) return;
+            int from = info.Slot + 1, to = info.LastSubItemSlot;
             int childCount = to >= from ? to - from + 1 : 0;
-            int collapsedChildren = collapsedChildCount;
-            int visibleChildren = childCount - collapsedChildren;
-
-            bool disagrees = !info.IsVisible && visibleChildren > 0;
-
-            // Silent unless the group's own flag disagrees with the slot table.
-            if (!disagrees)
-            {
-                return;
-            }
-
-            builder.Append("AUDIT ").Append(tag)
-                .Append(" slot=").Append(info.Slot)
-                .Append(" isVisible=").Append(info.IsVisible)
-                .Append(" children=[").Append(from).Append("..").Append(to).Append(']')
-                .Append(" collapsedChildren=").Append(collapsedChildren)
-                .Append(" visibleChildren=").Append(visibleChildren)
-                .Append(" ranges=").Append(Ranges(collapsed));
-
-            if (disagrees)
-            {
-                builder.Append("   <<< DESYNC: group flagged collapsed but children are visible");
-            }
-
-            Write(builder.ToString());
+            int visibleChildren = childCount - collapsedChildCount;
+            if (!(!info.IsVisible && visibleChildren > 0)) return;
+            Seq(string.Format(CultureInfo.InvariantCulture,
+                "AUDIT {0} key={1} slot={2} isVisible={3} children=[{4}..{5}] collapsedChildren={6} visibleChildren={7} ranges={8}   <<< DESYNC",
+                tag, Key(info), info.Slot, info.IsVisible, from, to, collapsedChildCount, visibleChildren, Ranges(collapsed)));
         }
     }
 }
